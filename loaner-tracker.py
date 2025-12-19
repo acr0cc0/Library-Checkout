@@ -1,155 +1,113 @@
 ## Author: Anthony Crocco 2025
-## A GUI implementation of a library checkout app for Kolbe Cathedral
+## A GUI implementation of a library checkout app for my school
 ## Currently keeps track of loaned chromebooks 
 ## Future implementations will include support for library books and other materials
-## and connecting to google sheets api
 
-import tkinter as tk
-from tkinter import messagebox
-import pandas as pd
-import os
+# --- Configuration ---
+SHEET_NAME = 'test'
+SERVICE_ACCOUNT_FILE = 'credentials.json'
 
-# Configuration
-FILE_NAME = 'loaners.xlsx'
-WINDOW_TITLE = 'Library Checkout'
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 
 class LoanApp:
-
     def __init__(self, master):
         self.master = master
-        master.title(WINDOW_TITLE)
+        master.title("Google Sheets Loaner Entry")
         
-        self.df = self.load_data()
-
+        # Tkinter variables
         self.fname_var = tk.StringVar()
         self.lname_var = tk.StringVar()
         self.num_var = tk.StringVar()
-        self.date_var = tk.StringVar()
         self.status_var = tk.StringVar()
-        self.status_var.set("Ready to add a new entry.")
+        
+        # Connect immediately
+        self.sheet = None
+        self.connect_to_sheets()
 
+        # Build the UI
         self.setup_ui()
 
-    def load_data(self):
+    def connect_to_sheets(self):
+        self.status_var.set("Connecting to Google Sheets...")
         try:
-            # Try to read from the excel file
-            df = pd.read_excel(FILE_NAME, index_col=0)
-            print(f"Loaded {len(df)} records from {FILE_NAME}")
-        except FileNotFoundError:
-            # If the file doesn't exist, create a fresh DataFrame with the required columns
-            df = pd.DataFrame(columns=['first-name', 'last-name', 'barcode-number', 'date'])
-            print(f"'{FILE_NAME}' not found. Creating a new DataFrame.")
+            creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+            client = gspread.authorize(creds)
+            
+            # attempting to open
+            self.sheet = client.open(SHEET_NAME).sheet1
+            
+            self.status_var.set(f"Connected to '{SHEET_NAME}'. Ready.")
+            print("Connection Successful")
         except Exception as e:
-            # Handle other potential read errors (e.g., file corrupted)
-            messagebox.showerror("File Error", f"Error loading Excel file: {e}. Starting with an empty dataset.")
-            df = pd.DataFrame(columns=['first-name', 'last-name', 'barcode-number', 'date'])
-        return df
-
-    def save_data(self):
-        try:
-            self.df.to_excel(FILE_NAME, engine='openpyxl')
-        except Exception as e:
-            messagebox.showerror("Save Error", f"Failed to save data to {FILE_NAME}: {e}")
-            return False
-        return True
+            self.status_var.set(f"Error: {e}")
+            messagebox.showerror("Connection Error", f"Could not connect.\nError: {e}")
 
     def setup_ui(self):
-        pad_args = {'padx': 10, 'pady': 5}
+        input_frame = tk.Frame(self.master, padx=10, pady=10)
+        input_frame.pack(fill='x')
 
-        # Input Fields and Labels
+        # --- Standard Text Inputs ---
         labels = [
-            ("First Name:", self.fname_var), 
-            ("Last Name:", self.lname_var), 
-            ("Barcode Number:", self.num_var), 
-            ("Date (mm-dd-yyyy):", self.date_var)
+            ("First Name:", self.fname_var, 0), 
+            ("Last Name:", self.lname_var, 1), 
+            ("Barcode Number:", self.num_var, 2)
         ]
 
-        for i, (text, var) in enumerate(labels):
-            # Label
-            lbl = tk.Label(self.master, text=text, font=('Arial', 10, 'bold'))
-            lbl.grid(row=i, column=0, sticky='w', **pad_args)
-            
-            # Entry field
-            entry = tk.Entry(self.master, textvariable=var, width=40, font=('Arial', 10))
-            entry.grid(row=i, column=1, sticky='ew', **pad_args)
+        for text, var, row in labels:
+            tk.Label(input_frame, text=text, font=('Arial', 10, 'bold')).grid(row=row, column=0, sticky='w', pady=5)
+            tk.Entry(input_frame, textvariable=var, width=30).grid(row=row, column=1, pady=5)
+
+        # --- Date Picker Widget ---
+        tk.Label(input_frame, text="Date:", font=('Arial', 10, 'bold')).grid(row=3, column=0, sticky='w', pady=5)
         
-        # Add Entry Button 
-        self.add_button = tk.Button(
-            self.master, 
-            text="Add Entry and Save to Excel", 
-            command=self.add_entry,
-            bg='white', 
-            fg='black',    
-            font=('Arial', 12, 'bold'),
-            activebackground='#45A049',
-            relief=tk.RAISED
-        )
-        self.add_button.grid(row=len(labels), column=0, columnspan=2, pady=15, padx=10, sticky='ew')
+        self.date_entry = DateEntry(input_frame, width=27, background='darkblue',
+                                    foreground='white', borderwidth=2, date_pattern='mm/dd/yyyy')
+        self.date_entry.grid(row=3, column=1, pady=5)
 
-        # Status Bar 
-        self.status_label = tk.Label(
-            self.master, 
-            textvariable=self.status_var, 
-            bd=1, 
-            relief=tk.SUNKEN, 
-            anchor='w', # Align text to the west (left)
-            font=('Arial', 9)
-        )
-        # Place the status bar at the bottom of the window
-        self.status_label.grid(row=len(labels) + 1, column=0, columnspan=2, sticky='ew')
+        # --- Submit Button ---
+        btn = tk.Button(self.master, text="Add Entry", command=self.add_entry, 
+                        bg="#4CAF50", fg="white", font=('Arial', 12, 'bold'))
+        btn.pack(pady=10, ipadx=20)
 
-        # Configure grid to expand cleanly
-        self.master.grid_columnconfigure(1, weight=1)
+        # --- Status Bar ---
+        status_label = tk.Label(self.master, textvariable=self.status_var, bd=1, relief=tk.SUNKEN, anchor='w')
+        status_label.pack(side='bottom', fill='x')
 
-    def add_entry(self):        
-        # Get and clean data from input variables
-        fname = self.fname_var.get().strip()
-        lname = self.lname_var.get().strip()
-        num_str = self.num_var.get().strip()
-        date = self.date_var.get().strip()
-        
-        # Validation
-        if not all([fname, lname, num_str, date]):
-            self.status_var.set("Error: All fields must be filled out.")
+    def add_entry(self):
+        fname = self.fname_var.get()
+        lname = self.lname_var.get()
+        num_str = self.num_var.get()
+        date_str = self.date_entry.get()
+
+        if not all([fname, lname, num_str, date_str]):
+            messagebox.showwarning("Missing Data", "Please fill in all fields.")
             return
 
         try:
-            # Barcode number must be an integer
-            barcode_num = int(num_str)
+            num = int(num_str)
         except ValueError:
-            self.status_var.set("Error: Barcode Number must be a whole number.")
+            messagebox.showerror("Invalid Input", "Barcode must be a number.")
             return
 
-        # 3. Create the new row dictionary
-        new_row = {
-            'first-name': fname, 
-            'last-name': lname, 
-            'barcode-number': barcode_num, 
-            'date': date
-        }
-
-        # Append to the DataFrame
-        self.df = pd.concat([self.df, pd.Series(new_row).to_frame().T], ignore_index=True)
-
-        # Save the updated DataFrame to Excel
-        if self.save_data():
-            self.status_var.set(f"SUCCESS: Added entry for {fname} {lname} and saved to {FILE_NAME}.")
+        try:
+            new_row = [fname, lname, num, date_str]
+            self.sheet.append_row(new_row)
             
-            # Clear input fields after successful save
+            self.status_var.set(f"Added: {fname} {lname} on {date_str}")
+            
             self.fname_var.set("")
             self.lname_var.set("")
             self.num_var.set("")
-            self.date_var.set("")
-        else:
-            self.status_var.set("FATAL ERROR: Could not save data. Check console for details.")
-
+            # Set focus back to first name
+            self.master.children[list(self.master.children.keys())[0]].children['!entry'].focus_set()
+            
+        except Exception as e:
+            messagebox.showerror("API Error", f"Failed to save data: {e}")
 
 if __name__ == '__main__':
-    # Initialize the root window
     root = tk.Tk()
-    
-    # Initialize the application class
     app = LoanApp(root)
-
-    # Start the event loop
     root.mainloop()
